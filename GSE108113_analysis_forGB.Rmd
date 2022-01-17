@@ -1,0 +1,453 @@
+---
+title: "GSE108113"
+date: "`r Sys.Date()`"
+author:
+- name: Conor M. Finlay
+  affiliation: School of Medicine, Trinity College Dublin.
+  email: cofinlay@tcd.ie
+output:
+  rmdformats::downcute:
+    self_contained: TRUE
+    code_folding: hide
+    code_download: TRUE
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(rmdformats)
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=TRUE,
+	             cache=FALSE,
+               collapse = TRUE,
+               prompt=FALSE,
+               tidy=FALSE,
+               include = TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+
+# Background
+Analysis of human AAV kidney samples from [GSE108113](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE108113). This is taken from a larger datasets containing a wide breath of kidney disease. [Reference paper](https://pubmed.ncbi.nlm.nih.gov/29724730/)
+
+Importantly there are 2 groups of datasets:
+
+* glomerular tissue
+* tubulointerstitial tissue
+
+Analysis below is from just the glomerular tissue. Data is from a microarry and I downloaded the relevant samples ueing geo2R 
+
+* Control: "living donor" 6 samples 
+* Disease: "ANCA Associated Vasculitis" 15 samples
+
+The tubulointerstitial tissue has much higher n numbers [GSE108113](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE108113) for AAV
+
+---
+
+From the paper:
+
+> From paper Kidney tissue was processed prior to transcriptional profiling as previously described.22 Briefly, collected renal tissue was stored in RNAlater (ThermoFisher) and manually microdissected into glomerular and tubulointerstitial compartments. Transcriptional data were used to assess reliability of microdissection, targeting 16-fold to 64-fold enrichment of glomerular-selective or tubu- lointerstitial-selective transcripts in each respective compart- ment. In the discovery cohort, RNA from each compartment was processed and analysed using Affymetrix GeneChip Human Genome U133A V.2.0 and U133 Plus V.2.0 platforms. In the validation cohort, samples were profiled on a Human Gene ST 2.1 array platform. Probe sets were annotated to Entrez Gene IDs using custom CDF V.19 generated from the Univer- sity of Michigan Brain Array group, as previously described.23 Expression data were quantile normalised and batch corrected using COMBAT.24 Differential gene expression of selected gene transcripts was compared in the glomerular and tubulointersti- tial compartments between patients with NS and AAV versus LD using the significance analysis of microarrays (SAM) method.25 26 Genes were defined as significantly differentially expressed with q-value \<0.05. CEL files are accessible in GEO under reference numbers: GSE104948, GSE104954 and GSE108113
+
+They performed a strange allignemnt using
+
+<http://brainarray.mbni.med.umich.edu/Brainarray/Database/CustomCDF/19.0.0/entrezg.asp>
+
+<https://academic.oup.com/nar/article/33/20/e175/1082585>
+
+Note to self: I see no reason to adhere to this - just convert as you would. However the filter (i.e. machine used to generate probe Ids is unknown. I do not think it is the one they claim it to be above.)
+
+OK finally worked it out. So they took the probesets from their various microarray platforms and used a bespoke alignment database to better call genes to probes. They then created 'ID's for each gene which were standard gene IDs (NCBI/enterz) and appended it with a '_af' making look like a probe set attached to the microarray. Making me spend an entire day pulling my hair out thinking I couldn't work something as simple as this.
+
+---
+
+**Overall Objectives**
+Is there a IL-1 signal in the data?
+From Gareth:
+
+> So anything potentially inflammasome related:
+>
+> Priming signals: anything NFkB activating like TLRs/TNF etc
+>
+> Signal 2 related: NLRs, NODS, ASC, caspase-1, NEF1 etc. 
+>
+> Anything downstream: Il1b target genes or anything inflammation associated. 
+
+I am not a signalling or IL-1 expert so a specific list of genes written into a excel file would be more helpful here. Or an unbiased genelist from Gene Ontology. 
+
+I did run the datst through [IPA](https://digitalinsights.qiagen.com/products-overview/discovery-insights-portfolio/analysis-and-visualization/qiagen-ipa/) but it did not come up with an inflammasome pathway hit. See below. 
+
+
+
+# Setup
+
+## load data
+```{r packages, echo=FALSE}
+library(tidyverse)
+library(biomaRt)
+library(cowplot)
+library(ggrepel)
+```
+
+```{r load data,class.source = 'fold-show'}
+data<-read.csv('../human_data_ERCB/GSE108113_nephrotic_syndrome_and_ANCA/HC_c_ANCA_Glom_only/GSE108113_Glom_anca_HC.tsv',sep = '\t')
+```
+
+```{r table,class.source = 'fold-show', echo=FALSE}
+kable(data[1:15,],digits = 3,caption = "What the data looks like, no gene symbols!")
+```
+
+**Objective**
+We need to covert the gene ids to gene names. This can be done in biomart
+
+## Convert Gene names
+
+Skip to next section, this is jsut how I cleaned up the dataset.
+```{r Load database}
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+ensembl
+```
+* load dataset
+```{r,Load database2}
+datasets <- listDatasets(ensembl)
+searchDatasets(mart = ensembl, pattern = "hsapiens")
+```
+* Look through the filters
+
+```{r}
+#listFilters(ensembl)
+kable(head(listFilters(ensembl), 10),caption = "lots more attributes")
+```
+* Find attributes
+```{r get attributes}
+attributes <- listAttributes(ensembl)
+kable(head(attributes, 10))
+#attributes[grep("affy", attributes$name),]
+```
+* Fix gene IDs
+```{r fix gene IDs}
+#clean ids, remove the '_at' and convert to a integer 
+data$IDconv <- str_sub(data$ID, end = -4)
+data$IDconv <- as.integer(data$IDconv)
+```
+* Return symbols
+```{r return symbols}
+affyids=data$IDconv
+symbols <- getBM(attributes = c("ensembl_gene_id", "entrezgene_id",'hgnc_symbol'),
+      #filters = "ensembl_gene_id" ,
+      filters ="entrezgene_id",
+      values = affyids, 
+      mart = ensembl,
+      uniqueRows = FALSE)
+#Where ensembl.genes is a vector of Ensembl gene IDs.
+```
+
+```{r, , class.source = 'fold-show', echo=FALSE}
+kable(head(symbols,15),caption = "We have genenames")
+```
+
+* So how many are actually genes?
+
+```{r count real genes, , class.source = 'fold-show', echo=FALSE}
+kable(table(data$IDconv %in% symbols$entrezgene_id))
+```
+* Merge datasets
+```{r merge datasets}
+genes<-merge(x = data,y =  symbols, by.y='entrezgene_id', all.x=T,all.y = FALSE, by.x="IDconv")
+```
+
+* view new dataset
+```{r see merged data, class.source = 'fold-show', echo=FALSE}
+kable(head(genes, 10))
+```
+
+Save file with gene names, and share this with GB so he can investigate it.
+
+```{r, class.source = 'fold-show'}
+write_csv(x = genes,file = '../human_data_ERCB/GSE108113_nephrotic_syndrome_and_ANCA/GSE108113_Glom_anca_HC_with_symbols.csv')
+```
+
+
+# volcano plot
+
+* Setup code
+
+```{r setup volcano}
+# Add colour, size and alpha (transparency) to volcano plot --------------------
+cols <- c("up" = "#ffad73", "down" = "#26b3ff", "ns" = "grey") 
+sizes <- c("up" = 2, "down" = 2, "ns" = 1) 
+alphas <- c("up" = 1, "down" = 1, "ns" = 0.1)
+volcano <- genes %>%
+  mutate(gene_type = case_when(logFC >= 1 & adj.P.Val <= 0.5 ~ "up",
+                               logFC <= -1 & adj.P.Val <= 0.5 ~ "down",
+                               TRUE ~ "ns"))   
+```
+
+* Volcano plot
+
+```{r fig.height=5, fig.width=8}
+volcano %>%
+  ggplot(aes(x =`logFC`,
+             y=-log(`adj.P.Val`),
+             fill = gene_type,    
+             size = gene_type,
+             alpha = gene_type)) +
+  ggtitle('Healthy Controls vs ANCA - Glomerular tissue') +
+  xlab('Log2 Fold Change') +
+  geom_point(shape = 21, # Specify shape and colour as fixed local parameters    
+             colour = "black") + 
+  geom_hline(yintercept = -log10(0.05),
+             linetype = "dashed") + 
+  geom_vline(xintercept = c(log2(0.5), log2(2)),
+             linetype = "dashed") +
+  scale_fill_manual(values = cols) + # Modify point colour
+  scale_size_manual(values = sizes) + # Modify point size
+  scale_alpha_manual(values = alphas) + # Modify point transparency
+  scale_x_continuous(breaks = c(seq(-5, 5, 1)),  limits = c(-5, 5)) +
+ theme_cowplot() +
+  theme(legend.position = 'none')
+```
+
+## Highlight genes on volcano plot
+
+I downloaded a Go term for [response to interleukin 1](http://amigo.geneontology.org/amigo/term/GO:0070555)
+
+Get gene list from GO terms, apply filtering and add to volcano plot
+
+```{r, class.source = 'fold-show'}
+GO <- read.csv(file = 'response to interleukin-1_ (GO_0070555).txt', sep = '\t',header = F )
+GO <- unique(GO)
+GO <- as.character(GO$V1)
+kable(GO)
+```
+```{r}
+#identify <- volcano %>% filter(hgnc_symbol %in% c('CD163',"ICAM1","CD14",'PYCARD',"C3","C1QA","CCR2","COL1A1","DCN", "DPP4", "EGF","LCP1","AIF1","LCN2", "C1QC","CSF1R","CORO1A",'PLAUR'))
+identify <- volcano %>% filter(hgnc_symbol %in% GO)
+identify <- volcano %>% filter(hgnc_symbol %in% GO)
+```
+
+```{r}
+length(na.omit((ifelse(identify$gene_type != "ns",  identify$hgnc_symbol,NA))))
+```
+Volcano plot
+```{r fig.height=5, fig.width=8}
+volcano %>%
+  ggplot(aes(x =-`logFC`,
+             y=-log(`adj.P.Val`),
+             fill = gene_type,    
+             size = gene_type,
+             alpha = gene_type)) +
+  ggtitle('Healthy Controls vs ANCA - Glomerular tissue',subtitle = paste0("GO:response to interleukin-1: ", 
+    length(na.omit((ifelse(identify$gene_type != "ns",  identify$hgnc_symbol,NA)))),"/", length(GO), " genes significantly regulated"
+  )) +
+  xlab('Log2 Fold Change') +
+  geom_point(shape = 21, # Specify shape and colour as fixed local parameters    
+             colour = "black") + 
+  geom_hline(yintercept = -log10(0.05),
+             linetype = "dashed") + 
+  geom_vline(xintercept = c(log2(0.5), log2(2)),
+             linetype = "dashed") +
+  scale_fill_manual(values = cols) + # Modify point colour
+  scale_size_manual(values = sizes) + # Modify point size
+  scale_alpha_manual(values = alphas) + # Modify point transparency
+  scale_x_continuous(breaks = c(seq(-5, 5, 1)),  limits = c(-5, 5)) +
+    geom_label_repel(data = identify,size=5, # Add labels last to appear as the top layer  
+                   aes(label = ifelse(gene_type != "ns",  hgnc_symbol,"")
+                                        
+                                        ),
+                   force = 3,
+                   nudge_y = 1,max.overlaps = 200) +
+ theme_cowplot(font_size = 18) +
+  theme(legend.position = 'none')
+ggsave(filename = "volcano_human.png",width = 8,height = 5,dpi = 300)
+```
+
+## IPA
+
+IPA is run with the following parateters pvalue \>0.1 (not a normal pvallue but a scorings system) 2.6K gene were retained.
+
+All datasets in humans were used (including cell lines) It is best to look in IPA to produce pathways but some graphing can be done better here.
+
+The inputs to this are the outputs of IPA 'pathways' and 'upstream regulators' .xls
+
+Regulated pathways
+
+```{r fig.height=8, fig.width=10}
+
+IPA <- readxl::read_xls("../IPA/Human only/Original Human only all cells/pathways.xls")
+
+colnames(IPA)
+
+IPA <- IPA %>% mutate("p-value" = exp(-`-log(p-value)`))
+IPA <- IPA %>% mutate("sign"= sign(`z-score`))# %>% as.character("sign")
+IPA$sign <- as.factor(IPA$sign)
+
+head(IPA)
+
+#plotting <- IPA_LCM_strain %>% filter(`p-value` < 0.05) %>% top_n(20, wt = abs(`z-score`)) %>% mutate("IPA pathway" = factor(`Ingenuity Canonical Pathways`)) 
+
+plotting1 <- IPA %>% filter(`-log(p-value)` > 2.5) %>% top_n(5, wt = (`z-score`)) %>% mutate("IPA pathway" = factor(`Ingenuity Canonical Pathways`))
+
+plotting2 <- IPA %>% filter(`-log(p-value)` > 2.5) %>% top_n(15, wt = -(`z-score`)) %>% mutate("IPA pathway" = factor(`Ingenuity Canonical Pathways`))
+
+   
+
+plotting = rbind(plotting2,plotting1)
+
+plotting$`IPA pathway` <- reorder(plotting$`IPA pathway`, plotting$`z-score`)
+
+cols <- c("1"="#ffad73","-1"="#26b3ff")
+al <- c("0"=0,"1"=1)
+
+plotting %>% 
+   ggplot(aes(x = `z-score`,
+              y = `IPA pathway`,
+              fill = `sign`,
+              alpha=`-log(p-value)`
+              )) +
+
+   geom_bar(stat = "identity") + 
+      theme_cowplot(font_size = 16) + 
+  #scale_fill_gradient(high = "#ffad73", low= "#26b3ff") + theme(legend.position='none')
+  scale_fill_manual(values=cols,guide=FALSE) +
+    scale_alpha_continuous(range = c(0.2,1),limits=c(0,10),guide=FALSE)
+
+
+ggsave(filename = "IPA.pdf",width = 8, height = 10)
+
+
+```
+
+```{r fig.height=8, fig.width=10}
+Reg <- readxl::read_xls("../IPA/Human only/Original Human only all cells/regulators.xls")
+head(Reg)
+
+
+Reg <- Reg %>% filter(`Predicted Activation State` != is.na(`Predicted Activation State`)) %>% filter(`p-value of overlap` < 0.01) %>% top_n(30, wt = abs(`Activation z-score`))
+
+Reg$`Upstream Regulator` <- factor(Reg$`Upstream Regulator`)
+Reg$`Upstream Regulator` <- reorder(Reg$`Upstream Regulator`, Reg$`Activation z-score`)
+Reg <- Reg %>% mutate('sign'=sign(`Activation z-score`))
+Reg$sign <- as.factor(Reg$sign)
+cols <- c("1"="#ffad73","-1"="#26b3ff")
+
+Reg %>% 
+  ggplot(aes(
+  x = `Activation z-score`,
+  y = `Upstream Regulator`, 
+  fill = `sign`
+  #alpha = `p-value of overlap`
+  
+  )) +
+
+geom_bar(stat = "identity") +
+
+theme_cowplot(font_size = 16) + 
+   scale_fill_manual(values=cols,guide=FALSE) +
+  #scale_fill_gradient(high = "blue1", low= "green4") + 
+  #scale_alpha_continuous(range = c(0.2,1),limits=c(0,10),guide=FALSE) +
+  theme(legend.position='none')
+
+ggsave(filename = "Cell_type_regulators.pdf",width = 4, height = 10)
+
+```
+
+
+# GSEA
+I was unable to find any top hits for IL-1 using IL-1 but maybe I could do it the old fashioned way using GSEA.
+
+## setup
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+```
+Set up GSEA for human data
+```{r , class.source = 'fold-show'}
+# SET THE DESIRED ORGANISM HERE
+organism = "org.Hs.eg.db"
+BiocManager::install(organism, character.only = TRUE)
+library(organism, character.only = TRUE)
+```
+```{r}
+df <- volcano
+
+# we want the log2 fold change 
+original_gene_list <- -df$logFC
+
+# name the vector
+names(original_gene_list) <- df$ensembl_gene_id
+
+# omit any NA values 
+gene_list<-na.omit(original_gene_list)
+
+# sort the list in decreasing order (required for clusterProfiler)
+gene_list = sort(gene_list, decreasing = TRUE)
+```
+Run the core function
+```{r, class.source = 'fold-show'}
+gse <- gseGO(geneList=gene_list, 
+             ont ="ALL", 
+             keyType = "ENSEMBL", 
+             nPerm = 10000, 
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = org.Hs.eg.db, 
+             pAdjustMethod = "none")
+```
+Top hits
+```{r fig.height=12}
+require(DOSE)
+dotplot(gse, showCategory=12, split=".sign") + facet_grid(.~.sign)
+#dotplot(gse, showCategory=10) + facet_grid(.~.sign)
+```
+
+```{r fig.height=15, eval=FALSE}
+ridgeplot(gse) + labs(x = "enrichment distribution")
+```
+Look up IL-1 datsets
+```{r, class.source = 'fold-show'}
+look <- gse$Description
+IL1 <- which(str_detect(look, "response to interleukin-1"))
+length(IL1)
+IL1
+```
+```{r fig.height=8, class.source = 'fold-show'}
+#a <- 7
+a <- IL1[1]
+gseaplot(gse, by = "all", 
+           title = gse$Description[a],
+         geneSetID = a)
+
+```
+```{r fig.height=8, class.source = 'fold-show'}
+#a <- 7
+a <- IL1[2]
+gseaplot(gse, by = "all", 
+           title = gse$Description[a],
+         geneSetID = a)
+
+```
+
+Those last 2 plots look good. Il-1 pathway is def regulated up in AAV
+
+
+```{r, class.source = 'fold-show'}
+look <- gse$Description
+IL1 <- which(str_detect(look, "inflammasome"))
+length(IL1)
+IL1
+```
+
+
+```{r fig.height=8, class.source = 'fold-show'}
+#a <- 7
+a <- IL1[1]
+gseaplot(gse, by = "all", 
+           title = gse$Description[a],
+         geneSetID = a)
+
+```
