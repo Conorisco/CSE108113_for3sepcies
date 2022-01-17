@@ -92,7 +92,9 @@ library(ggrepel)
 ```
 
 ```{r load data,class.source = 'fold-show'}
-data<-read.csv('../human_data_ERCB/GSE108113_nephrotic_syndrome_and_ANCA/HC_c_ANCA_Glom_only/GSE108113_Glom_anca_HC.tsv',sep = '\t')
+#data<-read.csv('../human_data_ERCB/GSE108113_nephrotic_syndrome_and_ANCA/HC_c_ANCA_Glom_only/GSE108113_Glom_anca_HC.tsv',sep = '\t')
+
+data<-read.csv('./GSE108113_nephrotic_syndrome_and_ANCA/HC_c_ANCA_Glom_only/GSE108113_Glom_anca_HC.tsv',sep = '\t')
 ```
 
 ```{r table,class.source = 'fold-show', echo=FALSE}
@@ -166,7 +168,7 @@ kable(head(genes, 10))
 Save file with gene names, and share this with GB so he can investigate it.
 
 ```{r, class.source = 'fold-show'}
-write_csv(x = genes,file = '../human_data_ERCB/GSE108113_nephrotic_syndrome_and_ANCA/GSE108113_Glom_anca_HC_with_symbols.csv')
+write_csv(x = genes,file = './GSE108113_nephrotic_syndrome_and_ANCA/GSE108113_Glom_anca_HC_with_symbols.csv')
 ```
 
 
@@ -350,7 +352,7 @@ theme_cowplot(font_size = 16) +
   #scale_alpha_continuous(range = c(0.2,1),limits=c(0,10),guide=FALSE) +
   theme(legend.position='none')
 
-ggsave(filename = "Cell_type_regulators.pdf",width = 4, height = 10)
+ggsave(filename = "Cell_type_regulators.pdf",width = 8, height = 10)
 
 ```
 
@@ -451,3 +453,9 @@ gseaplot(gse, by = "all",
          geneSetID = a)
 
 ```
+
+
+```{r}
+sessionInfo()
+```
+
